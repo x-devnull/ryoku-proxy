@@ -128,3 +128,28 @@ network and proxy/VPN path to api.github.com first. Reauthentication is relevant
 for a real HTTP 401 response, not a connection reset alone. Once it prints
 `x-devnull`, rerun `bash tools/setup-repository.sh`. At this initial failure,
 no key directory was created by the script; do not remove existing signing keys.
+
+
+## Replace a key created with an incorrect host clock
+
+If the CI import reports `created ... in the future`, leave the system clock
+unchanged and rotate the unpublished repository key with:
+
+```sh
+bash tools/setup-repository.sh --rotate-github-time
+```
+
+This obtains a fresh Date header from an authenticated HTTPS GitHub API response
+with a unique query and no-cache request. It creates the key using that UTC time
+minus 60 seconds with GPG's per-process `--faked-system-time`; system time is
+not changed. Failure to obtain server time stops setup, without falling back to
+the incorrect local clock. Private exports and the new fingerprint replace the
+GitHub signing settings. The old key directory is preserved; the new directory
+is printed and must be backed up separately. The fingerprint changes.
+
+This mode is for initial setup before a repository key has been trusted by
+users. If a signed repository is already in use, coordinate key rotation and
+client trust updates before replacing the signing secrets. Import and signature
+verification in CI continue using the runner's normal time; expiration and
+signature checks are not disabled. Only key creation/export commands on the
+skewed host use the explicitly supplied UTC time. CI alone signs the packages.

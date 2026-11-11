@@ -36,7 +36,7 @@ jobs:
           export GNUPGHOME="$(mktemp -d)"
           chmod 700 "$GNUPGHOME"
           echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
-          printf '%s' "$REPO_SIGNING_KEY" | gpg --batch --import
+          printf '%s' "$REPO_SIGNING_KEY" | gpg --batch --pinentry-mode loopback --passphrase-fd 3 --import 3< <(printf '%s\n' "$REPO_SIGNING_PASSPHRASE")
       - name: Download release package and sign repository
         shell: bash
         run: |
