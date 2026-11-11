@@ -42,7 +42,7 @@ inspect it with `gpg --show-keys --with-fingerprint ryoku-proxy.asc`. Verify the
 
 ```sh
 sudo pacman-key --add ryoku-proxy.asc
-sudo pacman-key --lsign-key YOUR_VERIFIED_FULL_FINGERPRINT
+sudo pacman-key --lsign-key 54603E732557B97D68F0C69D0C963BD1263CF3FE
 ```
 
 Add this section to `/etc/pacman.conf`:
