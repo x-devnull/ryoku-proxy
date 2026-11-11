@@ -113,3 +113,18 @@ extraction, landing-only deployment, and a signed test repository using an
 ephemeral test key. The signing test is mandatory in Arch CI. A restricted local
 environment unable to run gpg-agent reports that test as skipped rather than
 claiming signature verification. Test keys are never used for production.
+
+
+## GitHub connection errors during setup
+
+`connection reset by peer` means the API connection was closed before account
+verification completed. It does not identify a wrong account. The setup now
+retries read-only account checks three times and stops before creating a key
+if verification still fails. An actual different account is reported only after
+GitHub returns its login successfully.
+
+Run `gh api user --jq .login` in the same terminal. If it fails, check your
+network and proxy/VPN path to api.github.com first. Reauthentication is relevant
+for a real HTTP 401 response, not a connection reset alone. Once it prints
+`x-devnull`, rerun `bash tools/setup-repository.sh`. At this initial failure,
+no key directory was created by the script; do not remove existing signing keys.

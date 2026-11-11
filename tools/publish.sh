@@ -3,11 +3,9 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 command -v gh >/dev/null || { echo 'GitHub CLI (gh) is required.' >&2; exit 1; }
-owner=$(gh api user --jq .login)
-if [[ "$owner" != x-devnull ]]; then
-  echo "Expected GitHub account x-devnull; current account: $owner" >&2
-  exit 1
-fi
+source tools/github-account.sh
+github_require_account x-devnull
+owner=x-devnull
 repo="$owner/ryoku-proxy"
 python3 tools/validate_release.py
 python3 -m unittest discover -s tests -q

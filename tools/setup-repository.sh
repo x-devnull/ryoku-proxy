@@ -4,7 +4,8 @@ set -euo pipefail
 repo=x-devnull/ryoku-proxy
 key_dir="${XDG_DATA_HOME:-$HOME/.local/share}/ryoku-proxy-signing"
 for binary in gpg gh; do command -v "$binary" >/dev/null || { echo "$binary is required" >&2; exit 1; }; done
-[[ "$(gh api user --jq .login)" == x-devnull ]] || { echo 'Use GitHub account x-devnull.' >&2; exit 1; }
+source "$(dirname "${BASH_SOURCE[0]}")/github-account.sh"
+github_require_account x-devnull
 if [[ -e "$key_dir" || -L "$key_dir" ]]; then
   echo "Signing directory already exists: $key_dir" >&2
   echo 'Reuse its key using configure-signing.sh with GNUPGHOME set to this directory.' >&2

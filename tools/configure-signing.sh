@@ -4,6 +4,8 @@ set -euo pipefail
 fingerprint="${1:?Usage: bash tools/configure-signing.sh FULL_FINGERPRINT}"
 [[ "$fingerprint" =~ ^[A-Fa-f0-9]{40,64}$ ]] || { echo 'Use the complete key fingerprint.' >&2; exit 1; }
 repo=x-devnull/ryoku-proxy
+source "$(dirname "${BASH_SOURCE[0]}")/github-account.sh"
+github_require_account x-devnull
 # Private material goes directly through stdin to GitHub Secrets, never into Git.
 gpg --armor --export-secret-keys "$fingerprint" | gh secret set REPO_SIGNING_KEY --repo "$repo"
 gh variable set REPO_SIGNING_FINGERPRINT --repo "$repo" --body "$fingerprint"
