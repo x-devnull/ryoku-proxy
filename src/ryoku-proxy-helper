@@ -1,0 +1,514 @@
+#!/usr/bin/python3 -I
+"""Ryoku root helper — privileged, path-restricted sing-box / nftables adapter.
+
+Invoked by pkexec; does not interpret shell, arbitrary paths or caller commands.
+Writes configuration atomically, runs sing-box check, restarts, tests TUN HTTPS,
+and restores original config on any failed candidate. No unrelated config edits.
+"""
+from __future__ import annotations
+
+import copy
+import fcntl
+import ipaddress
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+
+from pathlib import Path
+from urllib.request import Request, build_opener, ProxyHandler
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # trusted root-owned helper directory
+import firewall
+import routing
+
+CONFIG = Path('/etc/sing-box/config.json')
+SING_BOX = '/usr/bin/sing-box'
+SYSTEMCTL = '/usr/bin/systemctl'
+CURL = '/usr/bin/curl'
+
+
+def output(ok, message, data=None):
+    print(json.dumps({'ok': ok, 'message': message, 'data': data}, ensure_ascii=False), flush=True)
+
+
+def cmd(*args, timeout=25, **opts):
+    return subprocess.run(args, capture_output=True, text=True, timeout=timeout, **opts)
+
+
+def validate_transport(p):
+    if not isinstance(p, dict) or p.get('protocol') not in ('http', 'socks5'):
+        raise ValueError('Поддерживаются только HTTP и SOCKS5')
+    host = p.get('host', '')
+    if not isinstance(host, str) or not host or len(host) > 253:
+        raise ValueError('Некорректный адрес прокси')
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        if '..' in host or host[0] in '-.' or not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]*', host):
+            raise ValueError('Некорректное доменное имя')
+    port = p.get('port')
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise ValueError('Некорректный порт')
+    user, password = p.get('username', ''), p.get('password', '')
+    if any(not isinstance(x, str) or len(x) > 4096 or '\x00' in x for x in (user, password)):
+        raise ValueError('Некорректная авторизация')
+    tls, udp = p.get('tls', False), p.get('udp', False)
+    if type(tls) is not bool or type(udp) is not bool:
+        raise ValueError('Некорректные TLS / UDP флаги')
+    return {'protocol': p['protocol'], 'host': host, 'port': port,
+            'username': user, 'password': password, 'tls': tls, 'udp': udp}
+
+
+def load_config():
+    if CONFIG.is_symlink():
+        raise ValueError('Отказ: config.json не должен быть символьной ссылкой')
+    conf = json.loads(CONFIG.read_text(encoding='utf-8'))
+    if not isinstance(conf, dict) or not isinstance(conf.get('outbounds'), list):
+        raise ValueError('Не найдены sing-box outbounds')
+    return conf
+
+
+def outbound_index(conf):
+    for idx, out in enumerate(conf['outbounds']):
+        if isinstance(out, dict) and out.get('tag') == 'proxy':
+            if out.get('type') not in ('socks', 'http'):
+                raise ValueError('Outbound proxy не HTTP/SOCKS')
+            return idx
+    raise ValueError('В sing-box нет outbound с тегом proxy')
+
+
+def udp_rule(rule):
+    return (isinstance(rule, dict) and rule.get('action') == 'reject'
+            and rule.get('network') == 'udp' and set(rule) == {'network', 'action'})
+
+
+def resolver_tag(conf):
+    tags = {v.get('tag') for v in conf.get('dns', {}).get('servers', []) if isinstance(v, dict)}
+    if 'bootstrap-dns' in tags:
+        return 'bootstrap-dns'
+    chosen = conf.get('route', {}).get('default_domain_resolver')
+    if isinstance(chosen, str) and chosen in tags:
+        return chosen
+    raise ValueError('Нет bootstrap-dns: потребуется отдельно настроить DNS прокси')
+
+
+def build_config(existing, p):
+    modified = copy.deepcopy(existing)
+    idx = outbound_index(modified)
+    out = {'type': 'http' if p['protocol'] == 'http' else 'socks',
+           'tag': 'proxy', 'server': p['host'], 'server_port': p['port'],
+           'username': p['username'], 'password': p['password'],
+           'domain_resolver': resolver_tag(modified)}
+    if p['protocol'] == 'socks5':
+        out['version'] = '5'
+    elif p['tls']:
+        out['tls'] = {'enabled': True, 'server_name': p['host']}
+    modified['outbounds'][idx] = out
+    route = modified.get('route')
+    if not isinstance(route, dict) or not isinstance(route.get('rules'), list):
+        raise ValueError('Отсутствует route.rules; автоматическая настройка UDP невозможна')
+    rules = [r for r in route['rules'] if not udp_rule(r)]
+    if p['protocol'] == 'http' or not p['udp']:
+        # Always hijack DNS first, then block application UDP.
+        pos = next((i + 1 for i, r in enumerate(rules)
+                    if isinstance(r, dict) and r.get('action') == 'hijack-dns'), 0)
+        while pos < len(rules) and (rules[pos].get('outbound') == routing.ROUTE_TAG or
+              rules[pos].get('action') == 'sniff'):
+            pos += 1
+        rules.insert(pos, {'network': 'udp', 'action': 'reject'})
+    route['rules'] = rules
+    return modified
+
+
+def atomic_file(data: dict, template_stat):
+    fd, filename = tempfile.mkstemp(prefix='.ryoku-proxy-', suffix='.json', dir=CONFIG.parent)
+    try:
+        os.fchown(fd, template_stat.st_uid, template_stat.st_gid)
+        os.fchmod(fd, stat.S_IMODE(template_stat.st_mode))
+        with os.fdopen(fd, 'w', encoding='utf-8') as fp:
+            json.dump(data, fp, ensure_ascii=False, indent=2)
+            fp.write('\n')
+            fp.flush()
+            os.fsync(fp.fileno())
+        return filename
+    except Exception:
+        if os.path.exists(filename):
+            os.unlink(filename)
+        raise
+
+
+def replace_config(conf, old_stat):
+    pending = atomic_file(conf, old_stat)
+    try:
+        os.replace(pending, CONFIG)
+    finally:
+        if os.path.exists(pending):
+            os.unlink(pending)
+
+
+def restart():
+    result = cmd(SYSTEMCTL, 'restart', 'sing-box', timeout=35)
+    if result.returncode:
+        raise RuntimeError('Не удалось перезапустить sing-box: ' + (result.stderr or result.stdout)[-500:])
+    time.sleep(1.0)
+    running = cmd(SYSTEMCTL, 'is-active', '--quiet', 'sing-box', timeout=6)
+    if running.returncode:
+        raise RuntimeError('sing-box остановился после перезапуска')
+
+
+def ip_test():
+    """Probes the current system route without env HTTP_PROXY (TUN expected)."""
+    env = {k: v for k, v in os.environ.items() if k.lower() not in
+           ('http_proxy', 'https_proxy', 'all_proxy', 'no_proxy')}
+    for url in ('https://api.ipify.org', 'https://icanhazip.com'):
+        try:
+            run = cmd(CURL, '--ipv4', '--fail', '--silent', '--show-error',
+                      '--noproxy', '*', '--connect-timeout', '5', '--max-time', '9', url,
+                      timeout=12, env=env)
+            if run.returncode == 0:
+                address = run.stdout.strip()
+                if ipaddress.ip_address(address).version == 4:
+                    return address
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            continue
+    raise RuntimeError('Не проходит HTTPS-проверка через системный маршрут')
+
+
+def import_current():
+    conf = load_config()
+    out = conf['outbounds'][outbound_index(conf)]
+    socks = out['type'] == 'socks'
+    udp_blocked = any(udp_rule(r) for r in conf.get('route', {}).get('rules', []))
+    return {
+        'protocol': 'socks5' if socks else 'http',
+        'host': out.get('server', ''), 'port': out.get('server_port', 0),
+        'username': out.get('username', ''), 'password': out.get('password', ''),
+        'tls': bool(out.get('tls', {}).get('enabled', False)) if not socks else False,
+        'udp': bool(socks and not udp_blocked),
+        'mtime_ns': CONFIG.stat().st_mtime_ns,
+    }
+
+
+def apply(candidates):
+    if not isinstance(candidates, list) or not 1 <= len(candidates) <= 2:
+        raise ValueError('Допускается один или два способа подключения')
+    checked_profiles = [validate_transport(c) for c in candidates]
+    original = load_config()
+    old_stat = CONFIG.stat()
+    diagnostics = []
+    fw_previous = firewall.extend_for_candidates(original, checked_profiles)
+    successful = False
+    try:
+        for candidate in checked_profiles:
+            changed = build_config(original, candidate)
+            staged = atomic_file(changed, old_stat)
+            installed = False
+            try:
+                check = cmd(SING_BOX, 'check', '-c', staged, timeout=15)
+                if check.returncode:
+                    raise RuntimeError('sing-box check: ' + (check.stderr or check.stdout)[-900:])
+                os.replace(staged, CONFIG)
+                installed = True
+                restart()
+                public_ip = ip_test()
+                if fw_previous is not None:
+                    firewall.set_active(changed)
+                successful = True
+                return {
+                    'protocol': candidate['protocol'], 'port': candidate['port'],
+                    'ip': public_ip, 'mtime_ns': CONFIG.stat().st_mtime_ns,
+                    'udp': candidate['udp'] if candidate['protocol'] == 'socks5' else False,
+                }
+            except (RuntimeError, OSError, subprocess.TimeoutExpired, ValueError) as exc:
+                diagnostics.append(f"{candidate['protocol'].upper()}: {str(exc)[:320]}")
+                if installed:
+                    replace_config(original, old_stat)
+                    try:
+                        restart()
+                    except (RuntimeError, OSError, subprocess.TimeoutExpired) as restore_exc:
+                        raise RuntimeError('Не удалось восстановить sing-box после ошибки: '
+                                           + str(restore_exc)[:200]) from restore_exc
+            finally:
+                if os.path.exists(staged):
+                    os.unlink(staged)
+        raise RuntimeError('Переключение отменено; прежняя конфигурация восстановлена. '
+                           + '; '.join(diagnostics))
+    finally:
+        if not successful and fw_previous is not None:
+            firewall.restore(fw_previous)
+
+
+
+MONITOR_ADDRESS = '127.0.0.1:19109'
+
+
+def monitor_configure(token=None):
+    """Enable a localhost-only, authenticated Clash API without touching arbitrary APIs."""
+    original = load_config()
+    previous = copy.deepcopy(original)
+    experimental = original.setdefault('experimental', {})
+    if not isinstance(experimental, dict):
+        raise ValueError('Некорректный experimental в sing-box')
+    current = experimental.get('clash_api', {})
+    if current and current.get('external_controller') != MONITOR_ADDRESS:
+        raise ValueError('В sing-box уже есть Clash API на другом адресе — не перезаписываем')
+    if token is not None:
+        if not isinstance(token, str) or not re.fullmatch(r'[A-Za-z0-9_-]{32,128}', token):
+            raise ValueError('Недопустимый токен мониторинга')
+        experimental['clash_api'] = {'external_controller': MONITOR_ADDRESS,
+                                     'secret': token, 'access_control_allow_origin':
+                                     ['http://127.0.0.1:19109']}
+    else:
+        if current.get('external_controller') != MONITOR_ADDRESS:
+            return {'enabled': False, 'changed': False}
+        experimental.pop('clash_api', None)
+        if not experimental:
+            original.pop('experimental', None)
+    old_stat = CONFIG.stat()
+    candidate = atomic_file(original, old_stat)
+    try:
+        validation = cmd(SING_BOX, 'check', '-c', candidate, timeout=15)
+        if validation.returncode:
+            raise RuntimeError('sing-box check: ' + (validation.stderr or validation.stdout)[-600:])
+        os.replace(candidate, CONFIG)
+        try:
+            restart()
+            if token is not None:
+                opener = build_opener(ProxyHandler({}))
+                request = Request('http://' + MONITOR_ADDRESS + '/connections', headers={
+                    'Authorization': 'Bearer ' + token})
+                with opener.open(request, timeout=4) as response:
+                    if response.status != 200:
+                        raise RuntimeError('API мониторинга не отвечает')
+        except Exception:
+            replace_config(previous, old_stat)
+            restart()
+            raise
+    finally:
+        if os.path.exists(candidate):
+            os.unlink(candidate)
+    return {'enabled': token is not None, 'changed': True, 'mtime_ns': CONFIG.stat().st_mtime_ns}
+
+
+# Operations are restricted by main() to root-authenticated pkexec calls.
+def save_routing_rules(values):
+    values = routing.validated_rules(values)
+    path = routing.ROUTING_FILE
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    fd, temp = tempfile.mkstemp(prefix='.routing-', dir=path.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            json.dump({'version': 1, 'exclusions': values}, stream, indent=2)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp, path)
+    finally:
+        if os.path.exists(temp):
+            os.unlink(temp)
+
+
+def routing_update(entries):
+    values = routing.validated_rules(entries)
+    original = load_config()
+    old_stat = CONFIG.stat()
+    modified = routing.update_config(original, values)
+    stage = atomic_file(modified, old_stat)
+    prev_fw = firewall.read_state()
+    installed = False
+    old_exclusions = routing.read_exclusions()
+    try:
+        check = cmd(SING_BOX, 'check', '-c', stage, timeout=15)
+        if check.returncode:
+            raise RuntimeError('sing-box check: ' + (check.stderr or check.stdout)[-900:])
+        if prev_fw:
+            upcoming = firewall.build_state(modified, exclusions=values)
+            upcoming['backups'] = prev_fw.get('backups', [])
+            firewall.apply_rules(upcoming)
+        os.replace(stage, CONFIG)
+        installed = True
+        restart()
+        ip_test()
+        # Keep the settings file and firewall policy in sync, or rollback all.
+        save_routing_rules(values)
+        if prev_fw:
+            firewall.save_state(upcoming)
+        return {'exclusions': values, 'mtime_ns': CONFIG.stat().st_mtime_ns}
+    except Exception:
+        try:
+            if installed:
+                replace_config(original, old_stat)
+                restart()
+        finally:
+            if prev_fw:
+                firewall.restore(prev_fw)
+            try:
+                save_routing_rules(old_exclusions)
+            except OSError:
+                pass
+        raise
+    finally:
+        if os.path.exists(stage):
+            os.unlink(stage)
+
+
+def fw_trial():
+    if firewall.read_state() is not None and firewall.present():
+        return {'enabled': True, 'trial': False}
+    conf = load_config()
+    # Trial sessions are not persistent; an independent systemd transient timer
+    # removes the filter after 120 s unless the user explicitly confirms.
+    state = firewall.provision(conf)
+    try:
+        firewall.TRIAL_PATH.write_text('pending\n', encoding='ascii')
+        timer = cmd(SYSTEMCTL, 'stop', 'ryoku-proxy-trial.timer', timeout=10)
+        schedule = cmd('/usr/bin/systemd-run', '--unit=ryoku-proxy-trial',
+                       '--on-active=120s', '/usr/lib/ryoku-proxy/ryoku-proxy-helper',
+                       'fw-recover', timeout=12)
+        if schedule.returncode:
+            raise RuntimeError('Cannot arm recovery timer: ' + schedule.stderr[-350:])
+    except Exception:
+        firewall.TRIAL_PATH.unlink(missing_ok=True)
+        firewall.remove_rules()
+        firewall.STATE_PATH.unlink(missing_ok=True)
+        raise
+    return {'enabled': True, 'trial': True, 'expires_sec': 120,
+            'endpoints': len(state['endpoints'])}
+
+
+def fw_confirm():
+    if not firewall.TRIAL_PATH.exists() or not firewall.present():
+        raise RuntimeError('No active Kill Switch trial to confirm')
+    # Persistent unit is enabled only AFTER a successful trial/confirmation.
+    result = cmd(SYSTEMCTL, 'enable', '--now', 'ryoku-proxy-killswitch.service', timeout=25)
+    if result.returncode:
+        raise RuntimeError('Cannot enable persistent firewall: ' + result.stderr[-350:])
+    firewall.TRIAL_PATH.unlink(missing_ok=True)
+    cmd(SYSTEMCTL, 'stop', 'ryoku-proxy-trial.timer', timeout=10)
+    return {'enabled': True, 'trial': False}
+
+
+def fw_recover():
+    if firewall.TRIAL_PATH.exists():
+        off = cmd(SYSTEMCTL, 'disable', '--now', 'ryoku-proxy-killswitch.service', timeout=15)
+        if off.returncode:
+            raise RuntimeError('Recovery could not disable persistent service: ' + off.stderr[-500:])
+        firewall.remove_rules()
+        firewall.STATE_PATH.unlink(missing_ok=True)
+        firewall.TRIAL_PATH.unlink(missing_ok=True)
+    return {'enabled': firewall.present()}
+
+
+def fw_disable():
+    # Keep recovery timer armed until firewall removal succeeds. If the user
+    # disables during trial and removal fails, automatic timeout still works.
+    off = cmd(SYSTEMCTL, 'disable', '--now', 'ryoku-proxy-killswitch.service', timeout=20)
+    if off.returncode:
+        raise RuntimeError('Cannot disable persistent Kill Switch: ' + off.stderr[-500:])
+    firewall.remove_rules()
+    firewall.STATE_PATH.unlink(missing_ok=True)
+    firewall.TRIAL_PATH.unlink(missing_ok=True)
+    cmd(SYSTEMCTL, 'stop', 'ryoku-proxy-trial.timer', timeout=10)
+    return {'enabled': False}
+
+
+def main():
+    if os.geteuid() != 0:
+        output(False, 'Нужны права root (pkexec)')
+        return 1
+    if len(sys.argv) != 2 or sys.argv[1] not in ('apply', 'import', 'start', 'stop', 'fw-enable', 'fw-trial', 'fw-confirm', 'fw-disable', 'fw-recover', 'fw-boot', 'fw-verify', 'monitor-enable', 'monitor-disable', 'routing-read', 'routing-update', 'local-networks', 'fw-backup-update'):
+        output(False, 'Неизвестная операция')
+        return 2
+    lock_fd = None
+    # systemctl enable --now (inside fw-confirm) synchronously starts fw-boot;
+    # it must not contend with the parent helper lock.
+    if sys.argv[1] != 'fw-boot':
+        lock_fd = os.open('/run/ryoku-proxy-helper.lock',
+                          os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX if sys.argv[1] == 'fw-recover'
+                        else fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(lock_fd)
+            output(False, 'Another Ryoku system operation is in progress')
+            return 1
+    try:
+        action = sys.argv[1]
+        if action == 'import':
+            output(True, 'Прочитана активная конфигурация', import_current())
+        elif action == 'apply':
+            raw = sys.stdin.buffer.read(32769)
+            if len(raw) > 32768:
+                raise ValueError('Запрос слишком большой')
+            payload = json.loads(raw.decode('utf-8'))
+            result = apply(payload.get('candidates'))
+            output(True, 'Подключение проверено через TUN', result)
+        elif action in ('fw-enable', 'fw-trial'):
+            output(True, 'Kill Switch trial started', fw_trial())
+        elif action == 'fw-confirm':
+            output(True, 'Kill Switch confirmed', fw_confirm())
+        elif action == 'fw-recover':
+            output(True, 'Trial recovered', fw_recover())
+        elif action == 'routing-read':
+            output(True, 'Routing loaded', {'exclusions': routing.read_exclusions()})
+        elif action == 'local-networks':
+            output(True, 'Local networks detected', {'networks': routing.local_networks()})
+        elif action == 'routing-update':
+            raw = sys.stdin.buffer.read(16385)
+            if len(raw) > 16384:
+                raise ValueError('Routing request too large')
+            payload = json.loads(raw.decode('utf-8'))
+            output(True, 'Routing saved', routing_update(payload.get('exclusions')))
+        elif action == 'fw-backup-update':
+            raw = sys.stdin.buffer.read(32769)
+            if len(raw) > 32768:
+                raise ValueError('Backup request too large')
+            payload = json.loads(raw.decode('utf-8'))
+            transports = [validate_transport(x) for x in payload.get('candidates', [])]
+            output(True, 'Backup proxy authorized', firewall.set_backups(transports))
+        elif action == 'fw-disable':
+            output(True, 'Kill Switch отключён — прямое соединение доступно', fw_disable())
+        elif action == 'fw-boot':
+            current = firewall.read_state()
+            if current is None:
+                raise RuntimeError('Kill Switch не настроен')
+            firewall.apply_rules(current)
+            output(True, 'Защитные правила восстановлены', {'enabled': True})
+        elif action == 'fw-verify':
+            present = firewall.present()
+            output(True, 'Firewall state verified', {'enabled': present, 'trial': firewall.TRIAL_PATH.exists()})
+        elif action == 'monitor-enable':
+            raw = sys.stdin.buffer.read(2048)
+            payload = json.loads(raw.decode('utf-8'))
+            output(True, 'Локальный API мониторинга включён', monitor_configure(payload.get('token')))
+        elif action == 'monitor-disable':
+            output(True, 'Локальный API мониторинга отключён', monitor_configure(None))
+        elif action == 'start':
+            result = cmd(SYSTEMCTL, 'enable', '--now', 'sing-box', timeout=35)
+            if result.returncode:
+                raise RuntimeError((result.stderr or result.stdout)[-600:])
+            output(True, 'Автозапуск sing-box включён')
+        elif action == 'stop':
+            result = cmd(SYSTEMCTL, 'stop', 'sing-box', timeout=35)
+            if result.returncode:
+                raise RuntimeError((result.stderr or result.stdout)[-600:])
+            protected = firewall.read_state() is not None and firewall.present()
+            output(True, 'sing-box остановлен. Kill Switch остаётся активен.' if protected
+                   else 'sing-box остановлен: прямое соединение теперь возможно!')
+        return 0
+    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired, UnicodeError) as exc:
+        output(False, str(exc)[:1800])
+        return 1
+    finally:
+        if lock_fd is not None:
+            os.close(lock_fd)
+
+
+if __name__ == '__main__':
+    sys.exit(main())

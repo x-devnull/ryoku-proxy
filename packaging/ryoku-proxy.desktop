@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Ryoku Proxy
+Name[ru]=Ryoku Proxy
+GenericName=System Proxy and Network Control
+GenericName[ru]=Управление системным прокси и сетью
+Comment=HTTP/SOCKS5 routing, nftables Kill Switch and sing-box connections
+Comment[ru]=Маршрутизация HTTP/SOCKS5, блокировка утечек nftables и подключения sing-box
+X-Ryoku-Author=x_devnull
+X-Ryoku-AuthorURL=https://github.com/x-devnull
+Exec=ryoku-proxy
+Icon=ryoku-proxy
+Terminal=false
+Categories=Network;Qt;
+StartupNotify=true

@@ -1,0 +1,10 @@
+[Trigger]
+Operation = Remove
+Type = Package
+Target = ryoku-proxy
+
+[Action]
+Description = Checking Ryoku Proxy firewall before removal...
+When = PreTransaction
+Exec = /usr/lib/ryoku-proxy/check-removal
+AbortOnFail

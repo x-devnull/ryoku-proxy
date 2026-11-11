@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.x_devnull.ryoku_proxy</id>
+  <name>Ryoku Proxy</name>
+  <summary>System proxy control and firewall dashboard for Ryoku</summary>
+  <summary xml:lang="ru">Управление прокси и сетевой защитой в Ryoku</summary>
+  <developer id="io.github.x_devnull"><name>x_devnull</name></developer>
+  <url type="homepage">https://x-devnull.github.io/ryoku-proxy/</url>
+  <project_license>MIT</project_license>
+  <metadata_license>CC0-1.0</metadata_license>
+  <launchable type="desktop-id">ryoku-proxy.desktop</launchable>
+  <description><p>Qt6 Wayland interface for sing-box TUN profiles, per-destination routing, nftables Kill Switch and network monitoring.</p></description>
+  <releases><release version="1.0.0" date="2026-11-11"><description><p>First public edition: ED 1.0.</p></description></release></releases>
+</component>

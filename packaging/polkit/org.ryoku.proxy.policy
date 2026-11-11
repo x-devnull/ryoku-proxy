@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+  "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
+<policyconfig>
+  <vendor>Ryoku Proxy</vendor>
+  <vendor_url>https://github.com/x-devnull</vendor_url>
+  <action id="org.ryoku.proxy.manage">
+    <description>Manage Ryoku Proxy network configuration</description>
+    <description xml:lang="ru">Управление сетевой конфигурацией Ryoku Proxy</description>
+    <message>Authentication is required to update sing-box and Ryoku Proxy firewall rules</message>
+    <message xml:lang="ru">Для изменения настроек sing-box и правил Ryoku Proxy требуются права администратора</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/ryoku-proxy/ryoku-proxy-helper</annotate>
+  </action>
+</policyconfig>

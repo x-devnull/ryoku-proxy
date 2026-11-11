@@ -1,0 +1,11 @@
+post_install() {
+  systemctl daemon-reload
+  echo 'Launch Ryoku Proxy from your application menu.'
+  echo 'An existing sing-box TUN configuration is required. Firewall stays unchanged.'
+}
+post_upgrade() { systemctl daemon-reload; }
+post_remove() {
+  rm -f /etc/polkit-1/rules.d/20-ryoku-proxy-local.rules
+  rm -f /etc/ryoku-proxy/authorized-users.json
+  systemctl daemon-reload
+}

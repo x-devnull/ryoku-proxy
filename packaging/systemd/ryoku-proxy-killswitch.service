@@ -1,0 +1,18 @@
+[Unit]
+Description=Ryoku Proxy persistent nftables Kill Switch
+Documentation=man:nft(8)
+DefaultDependencies=no
+After=local-fs.target systemd-udevd.service
+Before=network-pre.target sing-box.service
+Wants=network-pre.target
+ConditionPathExists=/etc/ryoku-proxy/killswitch.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/ryoku-proxy/ryoku-proxy-helper fw-boot
+RemainAfterExit=yes
+TimeoutStartSec=25
+# Deliberately NO ExecStop removing nft rules: stop/failure must stay fail-closed.
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,41 @@
+# Maintainer: x_devnull <https://github.com/x-devnull>
+# Local, unpublished Arch development package template.
+# After package installation, run: sudo ryoku-proxy-access grant USER
+# (PKGBUILD must not silently authorize a user.)
+# Build in a directory
+# containing ryoku-proxy-1.0.0.tar.gz; do not submit to AUR without release review.
+pkgname=ryoku-proxy
+pkgver=1.0.0
+pkgrel=1
+pkgdesc='Qt6 Wayland sing-box network and Kill Switch manager for Ryoku'
+arch=('any')
+install=ryoku-proxy.install
+url='https://github.com/x-devnull/ryoku-proxy'
+license=('MIT')
+depends=('python' 'pyside6' 'qt6-wayland' 'qt6-svg' 'sing-box' 'nftables' 'polkit' 'curl' 'iproute2' 'systemd' 'libsecret')
+source=('ryoku-proxy-1.0.0.tar.gz')
+sha256sums=('SKIP') # Replace with actual released source checksum before publication.
+
+package() {
+  local root="$srcdir/ryoku-proxy-1.0.0"
+  install -d "$pkgdir/usr/share/ryoku-proxy" "$pkgdir/usr/lib/ryoku-proxy"
+  install -Dm755 "$root/packaging/check-removal" "$pkgdir/usr/lib/ryoku-proxy/check-removal"
+  install -Dm644 "$root/packaging/hooks/ryoku-proxy-remove.hook" "$pkgdir/usr/share/libalpm/hooks/ryoku-proxy-remove.hook"
+  local f
+  for f in profile_store.py network_probe.py monitoring.py routing.py i18n.py ryoku_proxy.py; do
+    install -m644 "$root/src/$f" "$pkgdir/usr/share/ryoku-proxy/$f"
+  done
+  for f in firewall.py routing.py; do
+    install -m644 "$root/src/$f" "$pkgdir/usr/lib/ryoku-proxy/$f"
+  done
+  install -Dm755 "$root/src/ryoku-proxy-helper" "$pkgdir/usr/lib/ryoku-proxy/ryoku-proxy-helper"
+  install -Dm755 "$root/src/ryoku-proxy-access" "$pkgdir/usr/bin/ryoku-proxy-access"
+  install -Dm644 "$root/packaging/polkit/org.ryoku.proxy.policy" "$pkgdir/usr/share/polkit-1/actions/org.ryoku.proxy.policy"
+  install -Dm755 "$root/packaging/ryoku-proxy" "$pkgdir/usr/bin/ryoku-proxy"
+  install -Dm644 "$root/packaging/ryoku-proxy.desktop" "$pkgdir/usr/share/applications/ryoku-proxy.desktop"
+  install -Dm644 "$root/packaging/ryoku-proxy.svg" "$pkgdir/usr/share/pixmaps/ryoku-proxy.svg"
+  install -Dm644 "$root/packaging/ryoku-proxy.metainfo.xml" "$pkgdir/usr/share/metainfo/ryoku-proxy.metainfo.xml"
+  install -Dm644 "$root/packaging/systemd/ryoku-proxy-killswitch.service" "$pkgdir/usr/lib/systemd/system/ryoku-proxy-killswitch.service"
+  install -Dm644 "$root/LICENSE" "$pkgdir/usr/share/licenses/ryoku-proxy/LICENSE"
+  install -Dm644 "$root/README.md" "$pkgdir/usr/share/doc/ryoku-proxy/README.md"
+}

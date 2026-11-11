@@ -1,0 +1,8 @@
+#!/bin/sh
+if [ -e /etc/ryoku-proxy/killswitch.json ] || [ -e /run/ryoku-proxy-killswitch-trial ] ||
+   /usr/bin/systemctl is-active --quiet ryoku-proxy-killswitch.service ||
+   /usr/bin/systemctl is-enabled --quiet ryoku-proxy-killswitch.service ||
+   /usr/bin/nft list table inet ryoku_proxy >/dev/null 2>&1; then
+  echo 'Disable Ryoku Kill Switch before removing this package.' >&2
+  exit 1
+fi
