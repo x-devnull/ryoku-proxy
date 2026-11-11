@@ -8,6 +8,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -58,6 +59,42 @@ class DistributionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             module('prepare_pages').prepare(ROOT/'site', Path(tmp)/'pages')
             self.assertTrue((Path(tmp)/'pages/index.html').is_file())
+
+    @unittest.skipUnless(shutil.which('repo-add'), 'repo-add is required')
+    def test_database_embedding_without_gpg_agent(self):
+        # Metadata-only fixture: a synthetic signature checks embedding, not crypto.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            package = tmp / 'ryoku-proxy-1.0.0-1-any.pkg.tar.gz'
+            content = b'pkgname = ryoku-proxy\npkgver = 1.0.0-1\npkgdesc = Metadata fixture\narch = any\nsize = 1\n'
+            with tarfile.open(package, 'w:gz') as tar:
+                info = tarfile.TarInfo('.PKGINFO'); info.size = len(content)
+                tar.addfile(info, io.BytesIO(content))
+            signature = Path(str(package) + '.sig')
+            signature.write_bytes(b'metadata-only-test-signature')
+            database = tmp / 'test.db.tar.gz'
+            subprocess.run(['repo-add', '--include-sigs', str(database), str(package)],
+                           check=True, capture_output=True)
+            builder = module('build_repository')
+            builder.verify_embedded_signatures(database, [str(package)])
+            signature.write_bytes(b'different-signature')
+            with self.assertRaisesRegex(ValueError, 'mismatched'):
+                builder.verify_embedded_signatures(database, [str(package)])
+            # Exercise the production builder with only GPG stubbed, so removing
+            # --include-sigs from its real repo-add call is detected locally too.
+            def command(*args, **kwargs):
+                if args[0] != 'gpg':
+                    return subprocess.run(args, check=True, **kwargs)
+                if '--detach-sign' in args:
+                    Path(args[args.index('--output') + 1]).write_bytes(b'metadata-signature')
+                return subprocess.CompletedProcess(args, 0, stdout=b'public-key-fixture')
+            # The builder only accepts .zst packages; repo-add detects gzip content.
+            renamed = package.with_name('ryoku-proxy-1.0.0-1-any.pkg.tar.zst')
+            package.rename(renamed)
+            with patch.object(builder, 'run', side_effect=command):
+                builder.build([str(renamed)], tmp / 'output', 'A' * 40)
+            builder.verify_embedded_signatures(tmp / 'output/repo/arch/any/ryoku-proxy.db',
+                [str(tmp / 'output/repo/arch/any' / renamed.name)])
 
     @unittest.skipUnless(all(shutil.which(t) for t in ('gpg', 'repo-add', 'zstd')), 'Arch signing tools are required')
     def test_signed_repository_and_pages_preservation(self):

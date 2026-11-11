@@ -5,6 +5,7 @@ Uses an imported dedicated CI key in GNUPGHOME. No key generation or export
 of private material. The passphrase is supplied to gpg through stdin.
 """
 import argparse
+import base64
 import os
 from pathlib import Path
 import re
@@ -14,6 +15,30 @@ import tarfile
 
 def run(*args, **kwargs):
     return subprocess.run(args, check=True, **kwargs)
+
+def verify_embedded_signatures(database, packages):
+    expected = {Path(p).name: Path(str(p) + '.sig').read_bytes() for p in packages}
+    found = {}
+    with tarfile.open(database) as tar:
+        for member in tar.getmembers():
+            if not member.isfile() or not member.name.endswith('/desc'):
+                continue
+            fields = {}
+            for block in tar.extractfile(member).read().decode().strip().split('\n\n'):
+                rows = block.splitlines()
+                if len(rows) >= 2:
+                    fields[rows[0]] = '\n'.join(rows[1:])
+            name = fields.get('%FILENAME%')
+            if name in expected:
+                try:
+                    signature = base64.b64decode(fields.get('%PGPSIG%', ''), validate=True)
+                except ValueError as exc:
+                    raise ValueError('Invalid embedded package signature: ' + name) from exc
+                if signature != expected[name]:
+                    raise ValueError('Missing or mismatched embedded package signature: ' + name)
+                found[name] = signature
+    if found != expected:
+        raise ValueError('Repository database does not include all signed packages')
 
 def build(packages, output, fingerprint):
     if not re.fullmatch(r'[A-Fa-f0-9]{40,64}', fingerprint):
@@ -41,7 +66,11 @@ def build(packages, output, fingerprint):
         paths.append(str(dest))
     if not paths:
         raise ValueError('At least one package is required')
-    run('repo-add', str(arch / 'ryoku-proxy.db.tar.gz'), *paths)
+    # Modern repo-add requires this explicitly; detached signatures alone
+    # do not guarantee a %PGPSIG% record is embedded into the database.
+    database = arch / 'ryoku-proxy.db.tar.gz'
+    run('repo-add', '--include-sigs', str(database), *paths)
+    verify_embedded_signatures(database, paths)
     for kind in ('db', 'files'):
         path = arch / f'ryoku-proxy.{kind}.tar.gz'
         sign(path)
