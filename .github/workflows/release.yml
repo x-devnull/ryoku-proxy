@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: v1.0
+          ref: ${{ github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -29,10 +29,11 @@ jobs:
     runs-on: ubuntu-latest
     container: archlinux:base-devel
     steps:
-      - run: pacman -Syu --noconfirm --needed python git
+      - run: pacman -Syu --noconfirm --needed python git gnupg
       - uses: actions/checkout@v6
         with:
-          ref: v1.0
+          ref: ${{ github.sha }}
+      - run: RYOKU_REQUIRE_SIGNING_TEST=1 python -m unittest discover -s tests -p test_distribution.py -v
       - run: python tools/source_archive.py
       - name: Build native Arch package as unprivileged user
         run: |
@@ -47,15 +48,34 @@ jobs:
           path: |
             dist/*.pkg.tar.zst
             dist/SHA256SUMS
+  debian:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python tools/build_deb.py
+      - name: Inspect Debian archive
+        run: |
+          dpkg-deb --info dist/*.deb
+          dpkg-deb --contents dist/*.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debian-package
+          path: dist/*.deb
   release:
-    needs: [validate, package]
+    needs: [validate, package, debian]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: v1.0
+          ref: ${{ github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -64,13 +84,21 @@ jobs:
         with:
           name: arch-package
           path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: debian-package
+          path: dist
+      - name: Checksums for manual downloads
+        run: |
+          cd dist
+          sha256sum *.pkg.tar.zst *.deb > SHA256SUMS
       - name: Publish release and attach sources
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view v1.0 >/dev/null 2>&1; then
             gh release edit v1.0 --title 'v1.0 — ED 1.0' --notes-file docs/RELEASE_NOTES.md --target main
-            gh release upload v1.0 dist/ryoku-proxy-1.0.0.tar.gz dist/ryoku-proxy-1.0.0.tar.gz.sha256 dist/PKGBUILD dist/ryoku-proxy.install dist/*.pkg.tar.zst dist/SHA256SUMS --clobber
+            gh release upload v1.0 dist/ryoku-proxy-1.0.0-r2.tar.gz dist/ryoku-proxy-1.0.0-r2.tar.gz.sha256 dist/PKGBUILD dist/ryoku-proxy.install dist/*.pkg.tar.zst dist/*.deb dist/SHA256SUMS --clobber
           else
-            gh release create v1.0 --verify-tag --title 'v1.0 — ED 1.0' --notes-file docs/RELEASE_NOTES.md dist/ryoku-proxy-1.0.0.tar.gz dist/ryoku-proxy-1.0.0.tar.gz.sha256 dist/PKGBUILD dist/ryoku-proxy.install dist/*.pkg.tar.zst dist/SHA256SUMS
+            gh release create v1.0 --verify-tag --title 'v1.0 — ED 1.0' --notes-file docs/RELEASE_NOTES.md dist/ryoku-proxy-1.0.0-r2.tar.gz dist/ryoku-proxy-1.0.0-r2.tar.gz.sha256 dist/PKGBUILD dist/ryoku-proxy.install dist/*.pkg.tar.zst dist/*.deb dist/SHA256SUMS
           fi

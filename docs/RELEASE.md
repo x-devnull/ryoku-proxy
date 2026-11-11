@@ -27,17 +27,10 @@ This is a **pre-publication checklist**, not a claim the package has been releas
 Generate deterministic source archives with `python tools/source_archive.py`. The generated `dist/PKGBUILD` contains the actual archive checksum; the in-tree recipe remains a template.
 
 
-## First publication from the maintainer host
+## Distribution revision 1.0.0-2
 
-The prepared repository target is `x-devnull/ryoku-proxy` (public). With GitHub
-CLI authenticated as `x-devnull`, run `bash tools/publish.sh` from the checkout.
-It validates sources, creates the repository if absent, pushes `main`, enables
-Actions-based Pages, pushes `v1.0`, and waits for Pages and release workflows.
-It refuses an unrelated existing repository, unexpected origin or another account.
-Publication replaces main and v1.0 using force-with-lease, as requested for the
-English-first history rewrite. No credentials are written to the project.
-The release title is **v1.0 — ED 1.0**, package version **1.0.0**.
-
-Release CI builds the native Arch package in archlinux:base-devel as an
-unprivileged user. The binary package and SHA256SUMS are attached to v1.0.
-The pacman PreTransaction removal hook aborts if Kill Switch state is active.
+See [PACKAGES.md](PACKAGES.md) for signing setup, Pages repository deployment,
+manual Arch and Debian packages. Release workflow builds the exact triggering
+commit. A manual run on main attaches revision 1.0.0-2 and its distinct -r2
+source archive to v1.0 without moving the original Git tag or removing the
+original Arch revision. Publish future versions under new versioned assets.

@@ -3,6 +3,9 @@ on:
   push:
     branches: [main]
     paths: ['site/**', '.github/workflows/pages.yml']
+  workflow_run:
+    workflows: ['Publish signed pacman repository']
+    types: [completed]
   workflow_dispatch:
 permissions:
   contents: read
@@ -11,13 +14,35 @@ concurrency:
   cancel-in-progress: true
 jobs:
   build:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Preserve signed repository when updating the landing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          mkdir -p dist
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/pacman-repository" > dist/repository.json 2>dist/repository-error.txt; then
+            gh release download pacman-repository --repo "$GITHUB_REPOSITORY" --pattern pacman-repository.tar.gz --dir dist
+            python tools/prepare_pages.py --bundle dist/pacman-repository.tar.gz
+          elif grep -q 'HTTP 404' dist/repository-error.txt; then
+            echo 'First deployment: no signed repository has been published yet.'
+            python tools/prepare_pages.py
+          else
+            cat dist/repository-error.txt >&2
+            exit 1
+          fi
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:
-          path: site
+          path: dist/pages
   deploy:
     needs: build
     runs-on: ubuntu-latest

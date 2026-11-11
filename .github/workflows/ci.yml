@@ -21,7 +21,9 @@ jobs:
           python -m compileall -q src
           python -m unittest discover -s tests -v
       - name: Shell syntax
-        run: bash -n install.sh install-user.sh uninstall.sh
+        run: |
+          bash -n install.sh install-user.sh uninstall.sh tools/*.sh
+          for script in packaging/debian/*; do sh -n "$script"; done
       - name: Check sensitive files absent
         run: |
           ! find . -name 'monitor.json' -o -name 'profiles.json' -o -name 'killswitch.json' | grep .

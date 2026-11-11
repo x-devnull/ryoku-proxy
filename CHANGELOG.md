@@ -1,3 +1,9 @@
+## Distribution updates (unreleased)
+
+- Add signed pacman repository publishing and preserve it during landing deployments.
+- Keep manual Arch release packages and add a Debian 13 package builder.
+- Document key verification, CI signing setup and both installation routes in English and Russian.
+
 # 1.0.0 — ED 1.0
 
 First public edition, with release tag `v1.0`. Earlier 4.x labels below refer
@@ -16,7 +22,7 @@ existing versions for compatibility.
 - Align typography, focus and shape with current Ryoku primitives.
 - Harden text rendering, SOCKS5 negotiation and HTTPS probe curl configuration.
 - Add offscreen GUI tests, root-free permission fixtures and deterministic source packaging.
-- See docs/REVIEW.ru.md for validation and outstanding release requirements.
+- See docs/RELEASE.md for validation and outstanding release requirements.
 
 ## 4.1.0 — one-time desktop authorization
 

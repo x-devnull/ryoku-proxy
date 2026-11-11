@@ -40,3 +40,7 @@ node_modules/
 *.orig
 
 /LICENSE.txt
+
+*.deb
+*.asc
+*.sig

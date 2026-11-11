@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+case "$1" in
+  remove|purge)
+    rm -f /etc/polkit-1/rules.d/20-ryoku-proxy-local.rules
+    rm -f /etc/ryoku-proxy/authorized-users.json
+    ;;
+esac
+if [ -d /run/systemd/system ]; then systemctl daemon-reload; fi
+exit 0

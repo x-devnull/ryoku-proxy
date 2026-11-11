@@ -33,7 +33,7 @@ def build(destination):
     digest = hashlib.sha256(destination.read_bytes()).hexdigest()
     destination.with_name(destination.name + '.sha256').write_text(f'{digest}  {destination.name}\n')
     recipe = (ROOT / 'packaging/PKGBUILD').read_text()
-    recipe = recipe.replace("source=('ryoku-proxy-1.0.0.tar.gz')", f"source=('{destination.name}')")
+    recipe = recipe.replace("source=('ryoku-proxy-1.0.0-r2.tar.gz')", f"source=('{destination.name}')")
     recipe = recipe.replace("sha256sums=('SKIP')", f"sha256sums=('{digest}')")
     (destination.parent / 'PKGBUILD').write_text(recipe)
     (destination.parent / 'ryoku-proxy.install').write_bytes((ROOT / 'packaging/ryoku-proxy.install').read_bytes())
@@ -41,5 +41,5 @@ def build(destination):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('output', nargs='?', default=str(ROOT / 'dist/ryoku-proxy-1.0.0.tar.gz'))
+    parser.add_argument('output', nargs='?', default=str(ROOT / 'dist/ryoku-proxy-1.0.0-r2.tar.gz'))
     build(parser.parse_args().output)

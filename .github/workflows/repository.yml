@@ -1,0 +1,61 @@
+name: Publish signed pacman repository
+on:
+  workflow_run:
+    workflows: ['Publish ED 1.0 release']
+    types: [completed]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pacman-repository
+  cancel-in-progress: false
+jobs:
+  repository:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO_SIGNING_KEY: ${{ secrets.REPO_SIGNING_KEY }}
+      REPO_SIGNING_FINGERPRINT: ${{ vars.REPO_SIGNING_FINGERPRINT }}
+      REPO_SIGNING_PASSPHRASE: ${{ secrets.REPO_SIGNING_PASSPHRASE }}
+    steps:
+      - name: Require signing configuration
+        run: |
+          test -n "$REPO_SIGNING_KEY" || { echo 'Configure REPO_SIGNING_KEY first; see docs/PACKAGES.md.'; exit 1; }
+          test -n "$REPO_SIGNING_FINGERPRINT"
+      - run: pacman -Syu --noconfirm --needed python git github-cli gnupg
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+      - name: Import dedicated CI signing key
+        shell: bash
+        run: |
+          export GNUPGHOME="$(mktemp -d)"
+          chmod 700 "$GNUPGHOME"
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+          printf '%s' "$REPO_SIGNING_KEY" | gpg --batch --import
+      - name: Download release package and sign repository
+        shell: bash
+        run: |
+          mkdir -p dist/packages
+          gh release download v1.0 --repo "$GITHUB_REPOSITORY" --pattern 'ryoku-proxy-1.0.0-2-any.pkg.tar.zst' --dir dist/packages
+          python tools/build_repository.py --fingerprint "$REPO_SIGNING_FINGERPRINT" --output dist/signed dist/packages/*.pkg.tar.zst
+      - name: Store repository for Pages and detached signatures for manual installs
+        shell: bash
+        run: |
+          if ! gh release view pacman-repository --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create pacman-repository --repo "$GITHUB_REPOSITORY" --target main --prerelease --title 'Signed pacman repository' --notes 'Rolling package repository used by GitHub Pages. Install application releases from v1.0.'
+          fi
+          gh release upload pacman-repository dist/signed/pacman-repository.tar.gz dist/signed/repo/ryoku-proxy.asc dist/signed/repo/FINGERPRINT --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload v1.0 dist/signed/repo/arch/any/*.pkg.tar.zst.sig --repo "$GITHUB_REPOSITORY" --clobber
+      - name: Remove imported private material
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "${GNUPGHOME:-}" ]]; then
+            gpgconf --kill all || true
+            rm -rf -- "$GNUPGHOME"
+          fi

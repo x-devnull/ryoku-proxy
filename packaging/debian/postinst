@@ -1,0 +1,7 @@
+#!/bin/sh
+set -e
+if [ "$1" = configure ] && [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+fi
+# Do not start services, modify the TUN, or grant passwordless access.
+exit 0

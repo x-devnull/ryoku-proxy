@@ -33,11 +33,39 @@ curl, systemd и работающий графический агент polkit. 
 
 ## Установка в Ryoku / Arch Linux
 
-Скачай **ryoku-proxy-1.0.0-1-any.pkg.tar.zst** из
+### Подписанный репозиторий pacman (автообновления)
+
+После настройки подписи сопровождающим и первой публикации скачай
+`https://x-devnull.github.io/ryoku-proxy/repo/ryoku-proxy.asc` и проверь ключ:
+`gpg --show-keys --with-fingerprint ryoku-proxy.asc`. Сверь **полный отпечаток
+через независимый доверенный канал** и только после этого импортируй:
+
+```sh
+sudo pacman-key --add ryoku-proxy.asc
+sudo pacman-key --lsign-key YOUR_VERIFIED_FULL_FINGERPRINT
+```
+
+Добавь в `/etc/pacman.conf`:
+
+```ini
+[ryoku-proxy]
+SigLevel = Required
+Server = https://x-devnull.github.io/ryoku-proxy/repo/arch/any
+```
+
+Установка: `sudo pacman -Syu ryoku-proxy`. В дальнейшем приложение обновляется
+вместе с `sudo pacman -Syu`. Регистрация AUR не нужна. Не отключай проверку
+подписей. До первой публикации подписанного репозитория используй ручной
+пакет ниже. Настройка сопровождающим: [публикация пакетов](docs/PACKAGES.md).
+
+### Ручной пакет Arch (без подключения репозитория)
+
+
+Скачай **ryoku-proxy-1.0.0-2-any.pkg.tar.zst** из
 [релиза](https://github.com/x-devnull/ryoku-proxy/releases/tag/v1.0), затем:
 
 ```sh
-sudo pacman -U ./ryoku-proxy-1.0.0-1-any.pkg.tar.zst
+sudo pacman -U ./ryoku-proxy-1.0.0-2-any.pkg.tar.zst
 ryoku-proxy
 ```
 
@@ -48,8 +76,8 @@ Pacman устанавливает приложение, пункт меню, с�
 отзыв: `sudo ryoku-proxy-access revoke USER`.
 
 Установка не создаёт конфигурацию sing-box и не включает firewall. Требования
-описаны выше. Проект пока не опубликован в AUR или официальном репозитории
-pacman, поэтому `yay -S ryoku-proxy` недоступен. Flatpak не поставляется:
+описаны выше. Проект не опубликован в AUR или официальном репозитории
+дистрибутива, поэтому `yay -S ryoku-proxy` недоступен. Flatpak не поставляется:
 привилегированный помощник и системная политика устанавливаются Arch-пакетом.
 
 Для локальной сборки помести архив исходников и соответствующий PKGBUILD
@@ -58,6 +86,23 @@ pacman, поэтому `yay -S ryoku-proxy` недоступен. Flatpak не �
 Если ранее установлен пользовательский GUI, убери его перекрывающие файлы:
 `~/.local/bin/ryoku-proxy`, каталог `~/.local/share/ryoku-proxy`, запись меню
 и пользовательскую иконку. Shell-установщики оставлены для разработки.
+
+## Debian-пакет (ручное скачивание)
+
+Скачай `ryoku-proxy_1.0.0-2_all.deb` и SHA256SUMS из релиза:
+
+```sh
+sha256sum --ignore-missing -c SHA256SUMS
+sudo apt install ./ryoku-proxy_1.0.0-2_all.deb
+```
+
+Цель — Debian 13 с указанными зависимостями PySide6 и sing-box >=1.14.
+Если подходящего sing-box нет в подключённых репозиториях, используй
+[официальную инструкцию](https://sing-box.sagernet.org/installation/package-manager/).
+По-прежнему нужны настроенный sing-box TUN и графический агент polkit.
+Это дополнительный формат пакета: живая совместимость Debian ещё не
+подтверждена, собственный APT-репозиторий не предоставляется.
+Подробности: [пакеты](docs/PACKAGES.md).
 
 ## Первое подключение
 

@@ -33,11 +33,39 @@ applying changes; the installer does not create or replace your configuration.
 
 ## Install on Ryoku / Arch Linux
 
-Download **ryoku-proxy-1.0.0-1-any.pkg.tar.zst** from the
+### Signed pacman repository (automatic updates)
+
+After the maintainer configures signing and publishes the first repository,
+download `https://x-devnull.github.io/ryoku-proxy/repo/ryoku-proxy.asc` and
+inspect it with `gpg --show-keys --with-fingerprint ryoku-proxy.asc`. Verify the
+**complete fingerprint through an independent trusted channel** before importing:
+
+```sh
+sudo pacman-key --add ryoku-proxy.asc
+sudo pacman-key --lsign-key YOUR_VERIFIED_FULL_FINGERPRINT
+```
+
+Add this section to `/etc/pacman.conf`:
+
+```ini
+[ryoku-proxy]
+SigLevel = Required
+Server = https://x-devnull.github.io/ryoku-proxy/repo/arch/any
+```
+
+Then install with `sudo pacman -Syu ryoku-proxy`. Future `sudo pacman -Syu`
+updates also include this app. AUR registration is not required. Do not disable
+signature checking. If the signed repository is not published yet, use the
+manual download below. Maintainer setup: [package publishing](docs/PACKAGES.md).
+
+### Manual Arch package (no repository required)
+
+
+Download **ryoku-proxy-1.0.0-2-any.pkg.tar.zst** from the
 [release](https://github.com/x-devnull/ryoku-proxy/releases/tag/v1.0), then:
 
 ```sh
-sudo pacman -U ./ryoku-proxy-1.0.0-1-any.pkg.tar.zst
+sudo pacman -U ./ryoku-proxy-1.0.0-2-any.pkg.tar.zst
 ryoku-proxy
 ```
 
@@ -48,8 +76,8 @@ Optional local-session passwordless access: `sudo ryoku-proxy-access grant USER`
 revoke it with `sudo ryoku-proxy-access revoke USER`.
 
 The installer does not create your sing-box configuration or activate the
-firewall. See the requirements above. The package is not yet listed in AUR or
-an official pacman repository, so `yay -S ryoku-proxy` is not available.
+firewall. See the requirements above. The package is not listed in AUR or
+an official distro repository, so `yay -S ryoku-proxy` is not available.
 Flatpak is not supplied: the privileged host helper and system firewall policy
 are shipped through the native Arch package.
 
@@ -60,6 +88,22 @@ while the managed firewall is active. If you previously used the user GUI
 installer, remove its overriding `~/.local/bin/ryoku-proxy`, directory
 `~/.local/share/ryoku-proxy`, user desktop entry and user icon to use the
 system package. Legacy shell installers remain for development only.
+
+## Debian package (manual download)
+
+Download `ryoku-proxy_1.0.0-2_all.deb` and SHA256SUMS from the release:
+
+```sh
+sha256sum --ignore-missing -c SHA256SUMS
+sudo apt install ./ryoku-proxy_1.0.0-2_all.deb
+```
+
+Target Debian 13 with the declared PySide6 packages and sing-box >=1.14. Install
+a suitable sing-box package using its [official instructions](https://sing-box.sagernet.org/installation/package-manager/)
+if unavailable in your configured repositories. An existing sing-box TUN
+configuration and graphical polkit agent are still required. This is an
+additional distribution format, not a claim of live Debian compatibility
+validation or an APT repository. Details: [packages](docs/PACKAGES.md).
 
 ## First connection
 
